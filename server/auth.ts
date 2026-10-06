@@ -2,22 +2,103 @@ import crypto from 'crypto';
 import express from 'express';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Server-side environment variables (Strictly server-only)
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || process.env.ADMIN_SECRET_KEY || 'bikripilot_secure_session_secret_2026_x7a9';
+// Server-side environment variables (Strictly server-only - NEVER exposed to browser)
+export const SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
 
-// Initialize server-side Supabase client (using service role key if available, else anon key)
+// Primary modern keys with backward compatibility fallbacks
+export const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+export const SUPABASE_PUBLISHABLE_KEY =
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+
+export const ADMIN_SECRET_KEY =
+  process.env.ADMIN_SECRET_KEY || 'bikripilot_admin_secret_2026';
+
+export const SESSION_SECRET =
+  process.env.SESSION_SECRET || ADMIN_SECRET_KEY || 'bikripilot_secure_session_secret_2026_x7a9';
+
+export const ADMIN_ROUTE_PREFIX =
+  process.env.ADMIN_ROUTE_PREFIX || 'admin';
+
+// Initialize server-side Supabase client (using privileged secret key for backend tasks)
 export const serverSupabase: SupabaseClient | null =
-  SUPABASE_URL && (SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY)
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY, {
+  SUPABASE_URL && (SUPABASE_SECRET_KEY || SUPABASE_PUBLISHABLE_KEY)
+    ? createClient(SUPABASE_URL, SUPABASE_SECRET_KEY || SUPABASE_PUBLISHABLE_KEY, {
         auth: {
           persistSession: false,
           autoRefreshToken: false,
         },
       })
     : null;
+
+/**
+ * Validates application environment variables at startup.
+ * Logs presence and configuration status without ever leaking raw secret values.
+ */
+export function validateEnvironment(): { isValid: boolean; issues: string[] } {
+  const issues: string[] = [];
+  const mask = (val: string | undefined): string => {
+    if (!val) return '[NOT CONFIGURED]';
+    if (val.length <= 8) return '********';
+    return `${val.substring(0, 3)}...${val.substring(val.length - 3)} (length: ${val.length})`;
+  };
+
+  console.log('\n======================================================');
+  console.log('🔍 BikriPilot Security & Environment Validation Report');
+  console.log('======================================================');
+
+  // 1. VITE_SUPABASE_URL (Required)
+  if (!SUPABASE_URL) {
+    issues.push('VITE_SUPABASE_URL is REQUIRED but not set. Running in self-contained sandbox mode.');
+    console.warn('⚠️  VITE_SUPABASE_URL:              [REQUIRED - NOT CONFIGURED] (Sandbox Mode Active)');
+  } else {
+    console.log(`✅ VITE_SUPABASE_URL:              ${SUPABASE_URL}`);
+  }
+
+  // 2. VITE_SUPABASE_PUBLISHABLE_KEY (Required)
+  if (!SUPABASE_PUBLISHABLE_KEY) {
+    issues.push('VITE_SUPABASE_PUBLISHABLE_KEY is REQUIRED but not set (legacy VITE_SUPABASE_ANON_KEY also absent).');
+    console.warn('⚠️  VITE_SUPABASE_PUBLISHABLE_KEY: [REQUIRED - NOT CONFIGURED] (Sandbox Mode Active)');
+  } else {
+    const isLegacy = !process.env.VITE_SUPABASE_PUBLISHABLE_KEY && Boolean(process.env.VITE_SUPABASE_ANON_KEY);
+    console.log(`✅ VITE_SUPABASE_PUBLISHABLE_KEY: ${mask(SUPABASE_PUBLISHABLE_KEY)} ${isLegacy ? '(via legacy VITE_SUPABASE_ANON_KEY fallback)' : ''}`);
+  }
+
+  // 3. SUPABASE_SECRET_KEY (Required for server-side privileged operations)
+  if (!SUPABASE_SECRET_KEY) {
+    issues.push('SUPABASE_SECRET_KEY is REQUIRED for server-side privileged operations (legacy SUPABASE_SERVICE_ROLE_KEY also absent).');
+    console.warn('⚠️  SUPABASE_SECRET_KEY:          [REQUIRED FOR SERVER DB - NOT CONFIGURED]');
+  } else {
+    const isLegacy = !process.env.SUPABASE_SECRET_KEY && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    console.log(`✅ SUPABASE_SECRET_KEY:          ${mask(SUPABASE_SECRET_KEY)} (Server-only) ${isLegacy ? '(via legacy SUPABASE_SERVICE_ROLE_KEY fallback)' : ''}`);
+  }
+
+  // 4. ADMIN_SECRET_KEY (Required)
+  if (!process.env.ADMIN_SECRET_KEY) {
+    issues.push('ADMIN_SECRET_KEY is REQUIRED for server admin authorization. (Using built-in development fallback)');
+    console.warn(`⚠️  ADMIN_SECRET_KEY:              [REQUIRED - MISSING] Dev fallback active: ${mask(ADMIN_SECRET_KEY)}`);
+  } else {
+    console.log(`✅ ADMIN_SECRET_KEY:              ${mask(ADMIN_SECRET_KEY)} (Server-only)`);
+  }
+
+  // 5. SESSION_SECRET (Required)
+  if (!process.env.SESSION_SECRET) {
+    issues.push('SESSION_SECRET is REQUIRED for cryptographic AAL2 session signing. (Derived from ADMIN_SECRET_KEY)');
+    console.warn(`⚠️  SESSION_SECRET:                 [REQUIRED - MISSING] Derived from ADMIN_SECRET_KEY: ${mask(SESSION_SECRET)}`);
+  } else {
+    console.log(`✅ SESSION_SECRET:                 ${mask(SESSION_SECRET)} (Server-only)`);
+  }
+
+  // 6. ADMIN_ROUTE_PREFIX (Server-side configurable)
+  console.log(`✅ ADMIN_ROUTE_PREFIX:             /${ADMIN_ROUTE_PREFIX} (Server-side configurable)`);
+  console.log('======================================================\n');
+
+  return {
+    isValid: issues.length === 0,
+    issues,
+  };
+}
 
 // =========================================================================
 // 1. BASE32 & RFC 6238 TOTP ENGINE (Fully self-contained, no external deps)

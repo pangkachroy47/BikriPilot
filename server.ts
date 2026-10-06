@@ -16,6 +16,7 @@ import {
   checkRateLimit,
   resetRateLimit,
   generateTotpOtpauthUri,
+  validateEnvironment,
 } from './server/auth';
 
 dotenv.config();
@@ -1758,6 +1759,9 @@ process.on('uncaughtException', (error) => {
 
 // Vite middleware in dev or static files in production
 async function startServer() {
+  // Validate application environment variables at startup
+  validateEnvironment();
+
   const isProd = process.env.NODE_ENV === 'production';
 
   // =========================================================================
